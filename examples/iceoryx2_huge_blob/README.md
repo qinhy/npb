@@ -49,9 +49,14 @@ required = encoded_size(message)
 
 sample = publisher.loan_slice_uninit(required)
 
-shared_memory = np.frombuffer(
-    sample.payload().as_memory_view(),
-    dtype=np.uint8,
+payload = sample.payload()
+ptr = ctypes.cast(
+    payload.as_ptr(),
+    ctypes.POINTER(ctypes.c_uint8),
+)
+shared_memory = np.ctypeslib.as_array(
+    ptr,
+    shape=(payload.len(),),
 )
 
 encode(message, out=shared_memory)
@@ -65,9 +70,14 @@ The subscriber does the reverse:
 ```python
 sample = subscriber.receive()
 
-binary = np.frombuffer(
-    sample.payload().as_memory_view(),
-    dtype=np.uint8,
+payload = sample.payload()
+ptr = ctypes.cast(
+    payload.as_ptr(),
+    ctypes.POINTER(ctypes.c_uint8),
+)
+binary = np.ctypeslib.as_array(
+    ptr,
+    shape=(payload.len(),),
 )
 
 message = decode(HugeBlob, binary)
@@ -75,7 +85,8 @@ message = decode(HugeBlob, binary)
 assert np.shares_memory(binary, message.blob)
 ```
 
-`Slice.as_memory_view()` is an iceoryx2 no-copy view of the contiguous sample,
+`Slice.as_ptr()` exposes the contiguous shared-memory address in iceoryx2 0.9.3.
+`np.ctypeslib.as_array()` wraps that address as a NumPy array without copying,
 so NPB can operate directly on iceoryx2 memory.
 
 ## Requirements

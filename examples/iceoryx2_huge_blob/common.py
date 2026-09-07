@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import ctypes
 from pathlib import Path
 import tempfile
 import time
@@ -106,10 +107,19 @@ def check_markers(blob: np.ndarray) -> None:
 
 
 def slice_as_numpy(payload) -> np.ndarray:
-    """Zero-copy NumPy uint8 view over an iceoryx2 Slice[c_uint8]."""
-    # iceoryx2 Slice.as_memory_view() explicitly exposes a no-copy memoryview.
-    return np.frombuffer(
-        payload.as_memory_view(),
-        dtype=np.uint8,
-        count=payload.len(),
+    """Zero-copy NumPy uint8 view over iceoryx2 0.9.3 Slice[c_uint8].
+
+    iceoryx2 0.9.3 exposes Slice.as_ptr() + Slice.len(), but not
+    Slice.as_memory_view().  Build a ctypes pointer view over the shared
+    memory and let NumPy wrap it without copying.
+    """
+    length = payload.len()
+    ptr = ctypes.cast(
+        payload.as_ptr(),
+        ctypes.POINTER(ctypes.c_uint8),
+    )
+
+    return np.ctypeslib.as_array(
+        ptr,
+        shape=(length,),
     )

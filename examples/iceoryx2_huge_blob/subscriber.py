@@ -89,7 +89,7 @@ def main() -> None:
             # `blob` and every other ndarray returned by decode/decode_auto
             # points into `sample`'s iceoryx2 shared memory. Finish all work
             # with those arrays before this sample is released.
-            return
+            # return
 
     except iox2.NodeWaitFailure:
         print("exit")
