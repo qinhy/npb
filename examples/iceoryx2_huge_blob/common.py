@@ -123,3 +123,47 @@ def slice_as_numpy(payload) -> np.ndarray:
         ptr,
         shape=(length,),
     )
+
+
+def percentile(values: list[float], q: float) -> float:
+    if not values:
+        return float("nan")
+    return float(np.percentile(np.asarray(values, dtype=np.float64), q))
+
+
+def print_profile_summary(
+    title: str,
+    samples: dict[str, list[float]],
+    *,
+    unit: str = "ms",
+) -> None:
+    """Pretty-print min/p50/p95/max/mean for repeated benchmark samples."""
+    print()
+    print(f"=== {title} ===")
+    print(
+        f"{'metric':<18}"
+        f"{'count':>8}"
+        f"{'min':>12}"
+        f"{'p50':>12}"
+        f"{'p95':>12}"
+        f"{'max':>12}"
+        f"{'mean':>12}"
+        f"  {unit}"
+    )
+
+    for name, values in samples.items():
+        if not values:
+            continue
+
+        arr = np.asarray(values, dtype=np.float64)
+
+        print(
+            f"{name:<18}"
+            f"{len(values):>8d}"
+            f"{arr.min():>12.3f}"
+            f"{percentile(values, 50):>12.3f}"
+            f"{percentile(values, 95):>12.3f}"
+            f"{arr.max():>12.3f}"
+            f"{arr.mean():>12.3f}"
+            f"  {unit}"
+        )

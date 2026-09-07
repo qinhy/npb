@@ -182,3 +182,58 @@ There are two very different costs:
    ndarray views plus the Pydantic object tree.
 
 That is the behavior this demo is intended to make visible.
+
+
+## Repeatable profiling
+
+Start the subscriber first with matching warm-up/iteration counts:
+
+```bash
+uv run --extra iceoryx2 \
+    python examples/iceoryx2_huge_blob/subscriber.py \
+    --warmup 2 \
+    --iterations 10
+```
+
+Then run the publisher:
+
+```bash
+uv run --extra iceoryx2 \
+    python examples/iceoryx2_huge_blob/publisher.py \
+    --gib 2 \
+    --warmup 2 \
+    --iterations 10 \
+    --pause-ms 50
+```
+
+Publisher output contains one line per iteration and aggregate
+`min / p50 / p95 / max / mean` for:
+
+- loan time
+- ctypes/NumPy view creation
+- NPB encode time
+- iceoryx2 send time
+- total publisher processing time
+- encode throughput in GiB/s
+
+Subscriber output separately profiles:
+
+- ctypes/NumPy shared-memory view creation
+- `peek()`
+- `decode()` or `decode_auto()`
+- marker/zero-copy verification
+- total subscriber processing time
+
+The inter-iteration `--pause-ms` delay is intentionally excluded from the
+publisher timing. It gives the subscriber time to release each multi-GiB
+sample before the next loan.
+
+To profile generic decoding instead:
+
+```bash
+uv run --extra iceoryx2 \
+    python examples/iceoryx2_huge_blob/subscriber.py \
+    --auto \
+    --warmup 2 \
+    --iterations 10
+```
