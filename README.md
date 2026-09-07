@@ -239,6 +239,109 @@ NPB format version.
 NPB is currently alpha (`0.x`), so the binary format may evolve before `1.0`.
 
 
+## External immutable blobs with Vineyard
+
+For long pub/sub chains, copying the same multi-GiB ndarray at every hop will
+eventually saturate memory bandwidth. NPB 0.2 can move large ndarray leaves to
+an external immutable blob store while keeping the Pydantic structure in a
+small NPB control message.
+
+```python
+from npb import VineyardStore, encode, decode
+
+store = VineyardStore.connect("/tmp/vineyard.sock")
+
+control = encode(
+    obj,
+    blob_store=store,
+    externalize_min_bytes=16 * 1024 * 1024,
+)
+
+restored = decode(
+    MyModel,
+    control,
+    blob_store=store,
+)
+```
+
+Large arrays are stored as Vineyard blobs; the NPB manifest contains stable
+`$blob` references with object ID, byte range, dtype, and shape.
+
+The important long-chain optimization is transparent reuse. When a decoded
+ndarray already points into Vineyard shared memory, the next
+`encode(..., blob_store=store, ...)` detects the existing backing blob and
+reuses its object ID instead of copying the payload again.
+
+Without a store, generic decoding remains useful:
+
+```python
+generic = decode_auto(control)
+
+assert isinstance(generic["image"], BlobRef)
+```
+
+Typed decoding of external references requires the matching store:
+
+```python
+obj = decode(MyModel, control, blob_store=store)
+```
+
+See `examples/vineyard_chain/` for an iceoryx2 pipeline where a 2 GiB image is
+stored once in Vineyard while only ~64 KiB NPB control messages traverse each
+pub/sub hop.
+
+
+## ZeroMQ control transport
+
+NPB 0.3 includes an optional ZeroMQ PUSH/PULL adapter for transport-agnostic
+control messages. This is especially useful with an external blob store: large
+arrays stay in Vineyard while only a small NPB container crosses each ZeroMQ
+hop.
+
+Install the transport alone:
+
+```bash
+uv sync --extra zeromq
+```
+
+Or install the recommended ZeroMQ + Vineyard pipeline stack:
+
+```bash
+uv sync --extra zeromq-vineyard
+```
+
+Basic binary transport:
+
+```python
+from npb import ZmqPull, ZmqPush
+
+receiver = ZmqPull.bind("ipc:///tmp/input.sock")
+sender = ZmqPush.connect("ipc:///tmp/output.sock")
+
+binary = receiver.recv()
+sender.send(binary)
+```
+
+Direct typed model transport is also available:
+
+```python
+message = receiver.recv_model(MyModel, blob_store=store)
+
+sender.send_model(
+    message,
+    blob_store=store,
+    externalize_min_bytes=16 * 1024 * 1024,
+)
+```
+
+The wrappers also accept `tcp://` endpoints. NPB deliberately uses ordinary
+ZeroMQ copies by default because, after externalization, the control container
+is small and its buffer-lifetime management is simpler than forcing transport
+zero-copy.
+
+See `examples/zeromq_vineyard_chain/` for a three-stage pipeline that verifies
+`same_object=True` at every republish.
+
 ## iceoryx2 huge-blob example
 
 The repository includes a real multi-GiB zero-copy IPC integration under

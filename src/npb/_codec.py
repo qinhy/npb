@@ -8,7 +8,13 @@ import numpy as np
 from pydantic import BaseModel
 from pydantic_core import from_json, to_json
 
-from ._errors import BufferTooSmallError, FormatError, SchemaMismatchError
+from ._blob import BlobRef, BlobStore
+from ._errors import (
+    BlobStoreRequiredError,
+    BufferTooSmallError,
+    FormatError,
+    SchemaMismatchError,
+)
 from ._format import (
     ARRAY_ALIGNMENT,
     FORMAT_VERSION,
@@ -37,10 +43,23 @@ def _manifest_tree(
     node: Any,
     arrays: list[tuple[int, np.ndarray]],
     cursor: list[int],
+    *,
+    blob_store: BlobStore | None,
+    externalize_min_bytes: int | None,
 ) -> Any:
-    """Replace ndarray leaves with JSON-friendly binary references."""
+    """Replace ndarray leaves with inline or external binary references."""
     if isinstance(node, np.ndarray):
         _validate_ndarray(node)
+
+        should_externalize = (
+            blob_store is not None
+            and externalize_min_bytes is not None
+            and node.nbytes >= externalize_min_bytes
+        )
+
+        if should_externalize:
+            ref = blob_store.put_array(node)
+            return {"$blob": ref.to_manifest()}
 
         rel_offset = align_up(cursor[0], ARRAY_ALIGNMENT)
         cursor[0] = rel_offset + node.nbytes
@@ -56,14 +75,34 @@ def _manifest_tree(
             }
         }
 
+    if isinstance(node, BlobRef):
+        return {"$blob": node.to_manifest()}
+
     if isinstance(node, dict):
-        return {key: _manifest_tree(value, arrays, cursor) for key, value in node.items()}
+        return {
+            key: _manifest_tree(
+                value,
+                arrays,
+                cursor,
+                blob_store=blob_store,
+                externalize_min_bytes=externalize_min_bytes,
+            )
+            for key, value in node.items()
+        }
 
     if isinstance(node, (list, tuple)):
-        return [_manifest_tree(value, arrays, cursor) for value in node]
+        return [
+            _manifest_tree(
+                value,
+                arrays,
+                cursor,
+                blob_store=blob_store,
+                externalize_min_bytes=externalize_min_bytes,
+            )
+            for value in node
+        ]
 
     return node
-
 
 def _json_fallback(value: Any) -> Any:
     """Handle small NumPy scalar values that occur in metadata."""
@@ -101,6 +140,9 @@ def _prepare_output(out: np.ndarray | None, total_size: int, data_start: int) ->
 
 def _analyze_model(
     model: BaseModel,
+    *,
+    blob_store: BlobStore | None = None,
+    externalize_min_bytes: int | None = None,
 ) -> tuple[object, int, int, int, list[tuple[int, np.ndarray]], bytes]:
     """Build the manifest and calculate the exact encoded layout.
 
@@ -114,7 +156,21 @@ def _analyze_model(
 
     arrays: list[tuple[int, np.ndarray]] = []
     cursor = [0]
-    manifest = _manifest_tree(python_tree, arrays, cursor)
+    if externalize_min_bytes is not None:
+        if externalize_min_bytes < 0:
+            raise ValueError("externalize_min_bytes must be >= 0")
+        if blob_store is None:
+            raise ValueError(
+                "blob_store is required when externalize_min_bytes is provided"
+            )
+
+    manifest = _manifest_tree(
+        python_tree,
+        arrays,
+        cursor,
+        blob_store=blob_store,
+        externalize_min_bytes=externalize_min_bytes,
+    )
 
     data_bytes = cursor[0]
     metadata_json = to_json(manifest, fallback=_json_fallback)
@@ -152,7 +208,13 @@ def encoded_size(model: BaseModel) -> int:
 
     return align_up(max(data_start + data_bytes, FRAME_SIZE), FRAME_SIZE)
 
-def encode(model: BaseModel, *, out: np.ndarray | None = None) -> np.ndarray:
+def encode(
+    model: BaseModel,
+    *,
+    out: np.ndarray | None = None,
+    blob_store: BlobStore | None = None,
+    externalize_min_bytes: int | None = None,
+) -> np.ndarray:
     """Encode a Pydantic model into one frame-aligned ``np.uint8`` array.
 
     Parameters
@@ -163,6 +225,12 @@ def encode(model: BaseModel, *, out: np.ndarray | None = None) -> np.ndarray:
         Optional writable, C-contiguous, 1-D ``np.uint8`` array to reuse.
         If larger than required, the returned value is a view covering only
         the encoded region.
+    blob_store:
+        Optional immutable external blob store, such as ``VineyardStore``.
+    externalize_min_bytes:
+        When provided, ndarray leaves at least this large are stored in
+        ``blob_store`` and represented by tiny references instead of being
+        copied into the NPB container. Use ``0`` to externalize all arrays.
 
     Returns
     -------
@@ -176,7 +244,11 @@ def encode(model: BaseModel, *, out: np.ndarray | None = None) -> np.ndarray:
         data_start,
         arrays,
         metadata_json,
-    ) = _analyze_model(model)
+    ) = _analyze_model(
+        model,
+        blob_store=blob_store,
+        externalize_min_bytes=externalize_min_bytes,
+    )
 
     metadata_bytes = len(metadata_json)
     total_size = align_up(max(data_start + data_bytes, FRAME_SIZE), FRAME_SIZE)
@@ -233,9 +305,27 @@ def _restore_tree(
     *,
     data_start: int,
     data_bytes: int,
+    blob_store: BlobStore | None,
 ) -> Any:
     """Replace binary-reference objects with zero-copy NumPy views."""
     if isinstance(node, dict):
+        if set(node) == {"$blob"}:
+            try:
+                ref = BlobRef.from_manifest(node["$blob"])
+            except (TypeError, ValueError) as exc:
+                raise FormatError("invalid external blob reference") from exc
+
+            if blob_store is None:
+                return ref
+
+            if blob_store.kind != ref.store:
+                raise FormatError(
+                    f"blob reference requires store {ref.store!r}, "
+                    f"but decoder received {blob_store.kind!r}"
+                )
+
+            return blob_store.get_array(ref)
+
         if set(node) == {"$bin"}:
             ref = node["$bin"]
 
@@ -286,6 +376,7 @@ def _restore_tree(
                 binary,
                 data_start=data_start,
                 data_bytes=data_bytes,
+                blob_store=blob_store,
             )
             for key, value in node.items()
         }
@@ -297,6 +388,7 @@ def _restore_tree(
                 binary,
                 data_start=data_start,
                 data_bytes=data_bytes,
+                blob_store=blob_store,
             )
             for value in node
         ]
@@ -304,7 +396,12 @@ def _restore_tree(
     return node
 
 
-def _decode_tree(binary: np.ndarray, info: BinaryInfo) -> dict[str, Any]:
+def _decode_tree(
+    binary: np.ndarray,
+    info: BinaryInfo,
+    *,
+    blob_store: BlobStore | None,
+) -> dict[str, Any]:
     """Decode metadata and reconstruct ndarray leaves."""
     metadata_start = HEADER_SIZE
     metadata_end = metadata_start + info.metadata_bytes
@@ -323,6 +420,7 @@ def _decode_tree(binary: np.ndarray, info: BinaryInfo) -> dict[str, Any]:
         binary,
         data_start=info.data_start,
         data_bytes=info.data_bytes,
+        blob_store=blob_store,
     )
 
     if not isinstance(tree, dict):
@@ -336,16 +434,35 @@ def peek(binary: np.ndarray) -> BinaryInfo:
     return parse_header(binary)
 
 
-def decode_auto(binary: np.ndarray) -> dict[str, Any]:
+def decode_auto(
+    binary: np.ndarray,
+    *,
+    blob_store: BlobStore | None = None,
+) -> dict[str, Any]:
     """Decode to plain Python containers with zero-copy ``np.ndarray`` leaves.
 
     This function never imports or executes a class named by the encoded data.
     """
     info = parse_header(binary)
-    return _decode_tree(binary, info)
+    return _decode_tree(binary, info, blob_store=blob_store)
 
 
-def decode(model_type: type[T], binary: np.ndarray) -> T:
+def _contains_unresolved_blob_ref(node: Any) -> bool:
+    if isinstance(node, BlobRef):
+        return True
+    if isinstance(node, dict):
+        return any(_contains_unresolved_blob_ref(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_unresolved_blob_ref(value) for value in node)
+    return False
+
+
+def decode(
+    model_type: type[T],
+    binary: np.ndarray,
+    *,
+    blob_store: BlobStore | None = None,
+) -> T:
     """Decode and validate using an explicitly supplied Pydantic model class."""
     if not isinstance(model_type, type) or not issubclass(model_type, BaseModel):
         raise TypeError("model_type must be a Pydantic BaseModel class")
@@ -364,4 +481,12 @@ def decode(model_type: type[T], binary: np.ndarray) -> T:
             f"binary={info.schema_version}, class={expected_version}"
         )
 
-    return model_type.model_validate(_decode_tree(binary, info))
+    tree = _decode_tree(binary, info, blob_store=blob_store)
+
+    if _contains_unresolved_blob_ref(tree):
+        raise BlobStoreRequiredError(
+            "this NPB message contains external blob references; "
+            "pass the matching blob_store=... to decode()"
+        )
+
+    return model_type.model_validate(tree)

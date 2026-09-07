@@ -1,6 +1,6 @@
 [project]
 name = "npb"
-version = "0.1.0"
+version = "0.3.1"
 description = "Fast Pydantic + NumPy binary serialization with zero-copy decode"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,10 +34,29 @@ dependencies = [
 iceoryx2 = [
     "iceoryx2==0.9.3",
 ]
+vineyard = [
+    "vineyard>=0.24.2",
+    "setuptools<81",
+]
+zeromq = [
+    "pyzmq>=27.0",
+]
+zeromq-vineyard = [
+    "pyzmq>=27.0",
+    "vineyard>=0.24.2",
+    "setuptools<81",
+]
+pipeline = [
+    "iceoryx2==0.9.3",
+    "pyzmq>=27.0",
+    "vineyard>=0.24.2",
+    "setuptools<81",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pyzmq>=27.0",
     "ruff>=0.8",
 ]
 
