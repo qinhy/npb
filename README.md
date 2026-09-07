@@ -47,7 +47,7 @@ uv add npb
 For local development:
 
 ```bash
-git clone <your-repository>
+git clone <this-repository>
 cd npb
 uv sync --dev
 uv run pytest
