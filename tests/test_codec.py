@@ -14,6 +14,7 @@ from npb import (
     decode,
     decode_auto,
     encode,
+    encoded_size,
     peek,
 )
 
@@ -213,3 +214,24 @@ def test_object_dtype_is_rejected() -> None:
 
     with pytest.raises(TypeError, match="object dtypes"):
         encode(source)
+
+
+def test_encoded_size_matches_encode_without_payload_copy_requirement() -> None:
+    source = make_capture()
+
+    size = encoded_size(source)
+    binary = encode(source)
+
+    assert size == binary.nbytes
+
+
+def test_encoded_size_handles_non_contiguous_array() -> None:
+    @binary_schema("tests.encoded-size-noncontiguous", version=1)
+    class Matrix(BinaryModel):
+        value: np.ndarray
+
+    base = np.arange(100, dtype=np.int32).reshape(10, 10)
+    source = Matrix(value=base[:, ::2])
+
+    assert not source.value.flags.c_contiguous
+    assert encoded_size(source) == encode(source).nbytes

@@ -25,13 +25,12 @@ from ._schema import schema_identity
 T = TypeVar("T", bound=BaseModel)
 
 
-def _validate_ndarray(arr: np.ndarray) -> np.ndarray:
-    """Return a C-contiguous array that is safe for raw-byte serialization."""
+def _validate_ndarray(arr: np.ndarray) -> None:
+    """Validate that an ndarray is safe for raw-byte serialization."""
     if arr.dtype.hasobject:
         raise TypeError("NumPy object dtypes are not supported")
     if arr.dtype.fields is not None:
         raise TypeError("NumPy structured dtypes are not supported")
-    return np.ascontiguousarray(arr)
 
 
 def _manifest_tree(
@@ -41,19 +40,19 @@ def _manifest_tree(
 ) -> Any:
     """Replace ndarray leaves with JSON-friendly binary references."""
     if isinstance(node, np.ndarray):
-        arr = _validate_ndarray(node)
+        _validate_ndarray(node)
 
         rel_offset = align_up(cursor[0], ARRAY_ALIGNMENT)
-        cursor[0] = rel_offset + arr.nbytes
-        arrays.append((rel_offset, arr))
+        cursor[0] = rel_offset + node.nbytes
+        arrays.append((rel_offset, node))
 
         return {
             "$bin": {
                 "kind": "ndarray",
                 "offset": rel_offset,
-                "nbytes": arr.nbytes,
-                "dtype": arr.dtype.str,
-                "shape": list(arr.shape),
+                "nbytes": node.nbytes,
+                "dtype": node.dtype.str,
+                "shape": list(node.shape),
             }
         }
 
@@ -99,6 +98,60 @@ def _prepare_output(out: np.ndarray | None, total_size: int, data_start: int) ->
     return binary
 
 
+
+def _analyze_model(
+    model: BaseModel,
+) -> tuple[object, int, int, int, list[tuple[int, np.ndarray]], bytes]:
+    """Build the manifest and calculate the exact encoded layout.
+
+    This does not copy ndarray payload bytes.
+    """
+    if not isinstance(model, BaseModel):
+        raise TypeError("expected a Pydantic BaseModel instance")
+
+    schema_id, schema_version = schema_identity(type(model))
+    python_tree = model.model_dump(mode="python")
+
+    arrays: list[tuple[int, np.ndarray]] = []
+    cursor = [0]
+    manifest = _manifest_tree(python_tree, arrays, cursor)
+
+    data_bytes = cursor[0]
+    metadata_json = to_json(manifest, fallback=_json_fallback)
+    metadata_bytes = len(metadata_json)
+
+    data_start = align_up(HEADER_SIZE + metadata_bytes, FRAME_SIZE)
+    total_used = data_start + data_bytes
+    total_size = align_up(max(total_used, FRAME_SIZE), FRAME_SIZE)
+
+    return (
+        schema_id,
+        schema_version,
+        data_bytes,
+        data_start,
+        arrays,
+        metadata_json,
+    )
+
+
+def encoded_size(model: BaseModel) -> int:
+    """Return the exact number of bytes :func:`encode` will produce.
+
+    The ndarray payloads are inspected but not copied. This is useful when
+    the destination storage must be loaned or reserved first, such as an
+    iceoryx2 dynamic shared-memory sample.
+    """
+    (
+        _schema_id,
+        _schema_version,
+        data_bytes,
+        data_start,
+        _arrays,
+        _metadata_json,
+    ) = _analyze_model(model)
+
+    return align_up(max(data_start + data_bytes, FRAME_SIZE), FRAME_SIZE)
+
 def encode(model: BaseModel, *, out: np.ndarray | None = None) -> np.ndarray:
     """Encode a Pydantic model into one frame-aligned ``np.uint8`` array.
 
@@ -116,23 +169,17 @@ def encode(model: BaseModel, *, out: np.ndarray | None = None) -> np.ndarray:
     numpy.ndarray
         Self-contained, frame-aligned encoded data.
     """
-    if not isinstance(model, BaseModel):
-        raise TypeError("encode() requires a Pydantic BaseModel instance")
+    (
+        schema_id,
+        schema_version,
+        data_bytes,
+        data_start,
+        arrays,
+        metadata_json,
+    ) = _analyze_model(model)
 
-    schema_id, schema_version = schema_identity(type(model))
-    python_tree = model.model_dump(mode="python")
-
-    arrays: list[tuple[int, np.ndarray]] = []
-    cursor = [0]
-    manifest = _manifest_tree(python_tree, arrays, cursor)
-
-    data_bytes = cursor[0]
-    metadata_json = to_json(manifest, fallback=_json_fallback)
     metadata_bytes = len(metadata_json)
-
-    data_start = align_up(HEADER_SIZE + metadata_bytes, FRAME_SIZE)
-    total_used = data_start + data_bytes
-    total_size = align_up(max(total_used, FRAME_SIZE), FRAME_SIZE)
+    total_size = align_up(max(data_start + data_bytes, FRAME_SIZE), FRAME_SIZE)
 
     binary = _prepare_output(out, total_size, data_start)
 
@@ -158,7 +205,12 @@ def encode(model: BaseModel, *, out: np.ndarray | None = None) -> np.ndarray:
 
     previous_end = 0
 
-    for rel_offset, arr in arrays:
+    for rel_offset, source_arr in arrays:
+        # C-order is the on-wire ndarray storage order. Contiguous inputs stay
+        # zero-copy on the source side; non-contiguous inputs are normalized
+        # only here, not while merely calculating encoded_size().
+        arr = np.ascontiguousarray(source_arr)
+
         # Zero tiny alignment gaps if the caller reused an old buffer.
         if rel_offset > previous_end:
             binary[data_start + previous_end : data_start + rel_offset] = 0

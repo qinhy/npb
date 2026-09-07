@@ -238,6 +238,22 @@ NPB format version.
 
 NPB is currently alpha (`0.x`), so the binary format may evolve before `1.0`.
 
+
+## iceoryx2 huge-blob example
+
+The repository includes a real multi-GiB zero-copy IPC integration under
+`examples/iceoryx2_huge_blob/`.
+
+It loans one dynamic iceoryx2 byte slice, encodes NPB directly into that
+shared-memory sample with `encode(..., out=...)`, then reconstructs the
+Pydantic object on the subscriber while the huge NumPy leaves remain views of
+the received shared memory.
+
+Use `encoded_size(model)` to determine the exact iceoryx2 loan size without
+allocating the NPB output first.
+
+See `examples/iceoryx2_huge_blob/README.md`.
+
 ## Development
 
 ```bash
