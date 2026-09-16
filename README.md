@@ -53,6 +53,25 @@ uv sync --dev
 uv run pytest
 ```
 
+## Benchmarks
+
+The repository includes a dependency-free benchmark harness for allocated and
+preallocated encode, generic and typed decode, encoded-size calculation, and
+header inspection:
+
+```bash
+uv run python benchmarks/benchmark_codec.py
+```
+
+Use `--quick` for a smoke test, or configure payload sizes and array count:
+
+```bash
+uv run python benchmarks/benchmark_codec.py --sizes 64KiB 4MiB 64MiB --arrays 4
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for methodology and JSON
+output suitable for tracking results over time.
+
 ## Define a model
 
 Use `BinaryModel` so NumPy arrays are accepted naturally, then give the
