@@ -190,7 +190,12 @@ def _analyze_model(
     )
 
 
-def encoded_size(model: BaseModel) -> int:
+def encoded_size(
+    model: BaseModel,
+    *,
+    blob_store: BlobStore | None = None,
+    externalize_min_bytes: int | None = None,
+) -> int:
     """Return the exact number of bytes :func:`encode` will produce.
 
     The ndarray payloads are inspected but not copied. This is useful when
@@ -204,9 +209,17 @@ def encoded_size(model: BaseModel) -> int:
         data_start,
         _arrays,
         _metadata_json,
-    ) = _analyze_model(model)
+    ) = _analyze_model(
+        model,
+        blob_store=blob_store,
+        externalize_min_bytes=externalize_min_bytes,
+    )
 
-    return align_up(max(data_start + data_bytes, FRAME_SIZE), FRAME_SIZE)
+    return align_up(
+        max(data_start + data_bytes, FRAME_SIZE),
+        FRAME_SIZE,
+    )
+
 
 def encode(
     model: BaseModel,
