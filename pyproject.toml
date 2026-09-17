@@ -55,9 +55,11 @@ pipeline = [
 
 [dependency-groups]
 dev = [
+    "fastapi>=0.141.1",
     "pytest>=8",
     "pyzmq>=27.0",
     "ruff>=0.8",
+    "uvicorn>=0.53.0",
 ]
 
 [build-system]

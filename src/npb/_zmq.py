@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from ._blob import BlobStore
 from ._codec import decode, decode_auto, encode
 from ._format import require_binary_array
+from ._fixed import FixedStruct
+from ._fixed_codec import decode_fixed, encode_fixed
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -169,6 +171,25 @@ class _ZmqSocket:
             self.recv(flags=flags),
             blob_store=blob_store,
         )
+
+    def send_fixed(
+        self,
+        value: FixedStruct,
+        *,
+        copy: bool = True,
+        flags: int = 0,
+    ) -> int:
+        """Encode and send one compact fixed-layout control message."""
+        return self.send(encode_fixed(value), copy=copy, flags=flags)
+
+    def recv_fixed(
+        self,
+        model_type: type[FixedStruct],
+        *,
+        flags: int = 0,
+    ) -> FixedStruct:
+        """Receive and decode one compact fixed-layout control message."""
+        return decode_fixed(model_type, self.recv(flags=flags))
 
 
 class ZmqPush(_ZmqSocket):
