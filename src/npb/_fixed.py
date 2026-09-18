@@ -10,6 +10,7 @@ from ipaddress import IPv4Address
 import struct
 from typing import Any, ClassVar, Literal, Optional
 
+import numpy as np
 from pydantic import BaseModel, Field as PydanticField, create_model
 
 
@@ -338,6 +339,102 @@ class FixedPointU16(FixedField):
     def layout_rows(self, prefix: str = "") -> list[dict[str, Any]]:
         rows = super().layout_rows(prefix)
         rows[0]["encoding"] = f"u16*{self.scale:g}"
+        return rows
+
+
+class FixedNDArray(FixedField):
+    """Inline fixed-shape NumPy array.
+
+    The dtype and shape are part of the schema, so the wire representation is
+    exactly ``prod(shape) * dtype.itemsize`` bytes with no per-message metadata.
+    ``unpack_from`` returns a NumPy view over the supplied buffer.
+    """
+
+    python_type = np.ndarray
+
+    def __init__(
+        self,
+        dtype: Any,
+        shape: tuple[int, ...],
+        default: Any = _MISSING,
+        *,
+        require_c_contiguous: bool = True,
+    ) -> None:
+        super().__init__(default)
+
+        np_dtype = np.dtype(dtype)
+        if np_dtype.hasobject or np_dtype.fields is not None:
+            raise TypeError("FixedNDArray does not support object/structured dtypes")
+        if not shape or any(not isinstance(dim, int) or dim <= 0 for dim in shape):
+            raise ValueError("FixedNDArray shape must contain positive integer dimensions")
+
+        # Canonical wire byte order is little-endian, matching the scalar fields.
+        if np_dtype.itemsize > 1:
+            np_dtype = np_dtype.newbyteorder("<")
+
+        self.dtype = np_dtype
+        self.shape = tuple(shape)
+        self.count = int(np.prod(self.shape, dtype=np.int64))
+        self.size = self.count * self.dtype.itemsize
+        self.require_c_contiguous = require_c_contiguous
+
+    def validate(self, value: Any) -> None:
+        if not isinstance(value, np.ndarray):
+            raise TypeError(f"{self.name} must be numpy.ndarray")
+        if value.shape != self.shape:
+            raise ValueError(f"{self.name} must have shape {self.shape}, got {value.shape}")
+        if value.dtype != self.dtype:
+            raise TypeError(f"{self.name} must have dtype {self.dtype}, got {value.dtype}")
+        if self.require_c_contiguous and not value.flags.c_contiguous:
+            raise ValueError(f"{self.name} must be C-contiguous")
+
+    def pack_into(self, buffer: Any, base_offset: int, value: Any) -> None:
+        self.validate(value)
+        view = memoryview(buffer).cast("B")
+        start = base_offset + self.offset
+        end = start + self.size
+        # One raw byte copy; no JSON, shape, or dtype metadata on the wire.
+        view[start:end] = memoryview(value).cast("B")
+
+    def unpack_from(self, buffer: Any, base_offset: int) -> np.ndarray:
+        start = base_offset + self.offset
+        return np.frombuffer(
+            buffer,
+            dtype=self.dtype,
+            count=self.count,
+            offset=start,
+        ).reshape(self.shape)
+
+    @staticmethod
+    def _json_scalar_type(dtype: np.dtype[Any]) -> Any:
+        if np.issubdtype(dtype, np.bool_):
+            return bool
+        if np.issubdtype(dtype, np.integer):
+            return int
+        if np.issubdtype(dtype, np.floating):
+            return float
+        return Any
+
+    def pydantic_annotation(self) -> Any:
+        annotation: Any = self._json_scalar_type(self.dtype)
+        for _ in self.shape:
+            annotation = list[annotation]  # type: ignore[index]
+        return annotation
+
+    def pydantic_field(self) -> Any:
+        default = ... if self.default is _MISSING else np.asarray(self.default).tolist()
+        return PydanticField(
+            default=default,
+            json_schema_extra={
+                "x-npb-dtype": self.dtype.str,
+                "x-npb-shape": list(self.shape),
+                "x-npb-size": self.size,
+            },
+        )
+
+    def layout_rows(self, prefix: str = "") -> list[dict[str, Any]]:
+        rows = super().layout_rows(prefix)
+        rows[0]["encoding"] = f"ndarray[{self.dtype.str};{','.join(map(str, self.shape))}]"
         return rows
 
 
@@ -678,6 +775,8 @@ class FixedStruct(metaclass=FixedStructMeta):
             value = getattr(self, name)
             if isinstance(value, FixedStruct):
                 result[name] = value.to_dict()
+            elif isinstance(value, np.ndarray):
+                result[name] = value.tolist()
             elif isinstance(value, list):
                 result[name] = [item.to_dict() if isinstance(item, FixedStruct) else item for item in value]
             else:
@@ -691,6 +790,10 @@ class FixedStruct(metaclass=FixedStructMeta):
             item = value[name] if name in value else field.default
             if isinstance(field, (Nested, OptionalNested)) and item is not None and isinstance(item, dict):
                 item = field.struct_type.from_dict(item)
+            elif isinstance(field, FixedNDArray) and not isinstance(item, np.ndarray):
+                item = np.asarray(item, dtype=field.dtype)
+                if field.require_c_contiguous and not item.flags.c_contiguous:
+                    item = np.ascontiguousarray(item)
             elif isinstance(field, FixedArray) and isinstance(item, list):
                 if isinstance(field.element, Nested):
                     item = [field.element.struct_type.from_dict(x) if isinstance(x, dict) else x for x in item]

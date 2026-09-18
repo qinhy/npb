@@ -177,8 +177,8 @@ def _analyze_model(
     metadata_bytes = len(metadata_json)
 
     data_start = align_up(HEADER_SIZE + metadata_bytes, FRAME_SIZE)
-    total_used = data_start + data_bytes
-    total_size = align_up(max(total_used, FRAME_SIZE), FRAME_SIZE)
+    # total_used = data_start + data_bytes
+    # total_size = align_up(max(total_used, FRAME_SIZE), FRAME_SIZE)
 
     return (
         schema_id,

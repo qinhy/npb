@@ -51,14 +51,12 @@ async def camera_config(request: Request) -> Response:
     if content_type == "application/x-npb":
         body = await request.body()
         config = CameraPipelineConfig.from_bytes(body)
-        print("config",config)
         # Real gateway path may forward body unchanged to NPB-RPC here.
         return Response(content=config.to_bytes(), media_type="application/x-npb")
 
     if content_type == "application/json":
         model = JsonModel.model_validate(await request.json())
         config = CameraPipelineConfig.from_pydantic(model)
-        print("config",config)
         return JSONResponse(content=config.to_dict())
 
     raise HTTPException(415, "use application/json or application/x-npb")
