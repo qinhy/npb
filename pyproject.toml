@@ -1,6 +1,6 @@
 [project]
 name = "npb"
-version = "0.3.1"
+version = "0.4.0"
 description = "Fast Pydantic + NumPy binary serialization with zero-copy decode"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -57,7 +57,7 @@ pipeline = [
 dev = [
     "pytest>=8",
     "pyzmq>=27.0",
-    "ruff>=0.8",
+    "ruff>=0.17.5,<0.18",
 ]
 
 [build-system]
@@ -74,3 +74,8 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# The examples favour explicit try/except/pass and if/else blocks, several of
+# which carry explanatory comments; keep them as written.
+"examples/**" = ["SIM105", "SIM108"]

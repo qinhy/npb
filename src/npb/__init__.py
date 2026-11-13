@@ -10,14 +10,16 @@ from ._errors import (
     NPBError,
     SchemaMismatchError,
 )
-from ._format import FRAME_SIZE, BinaryInfo
+from ._format import FRAME_SIZE, MIN_FRAME_SIZE, BinaryInfo, BinaryLike
 from ._schema import BinaryModel, binary_schema
 from ._vineyard import VineyardStore
 from ._zmq import ZmqPull, ZmqPush
 
 __all__ = [
     "FRAME_SIZE",
+    "MIN_FRAME_SIZE",
     "BinaryInfo",
+    "BinaryLike",
     "BinaryModel",
     "BlobRef",
     "BlobStore",

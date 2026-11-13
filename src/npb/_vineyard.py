@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import weakref
+from contextlib import suppress
 from typing import Any
 
 import numpy as np
@@ -21,6 +23,10 @@ def _load_vineyard():
     return vineyard
 
 
+# Vineyard renders object IDs as "o" followed by 16 hex digits.
+_PLACEHOLDER_OBJECT_ID = "o" + "0" * 16
+
+
 class VineyardStore:
     """NPB external-array store backed by a local Vineyard IPC client.
 
@@ -31,6 +37,12 @@ class VineyardStore:
     Arrays returned by :meth:`get_array` are registered locally. Re-encoding
     the same resolved ndarray therefore reuses its Vineyard object ID and does
     not copy its multi-GiB payload again.
+
+    A registration lives exactly as long as the memory it describes: it is
+    tied to the ndarray that owns the resolved shared-memory mapping and is
+    dropped when that array is garbage-collected or the object is deleted
+    through this store. An unrelated array that later happens to occupy the
+    same address is therefore never mistaken for the old object.
     """
 
     kind = "vineyard"
@@ -59,12 +71,18 @@ class VineyardStore:
         # creates and persists raw Blob objects itself.
         self.copy_concurrency = copy_concurrency
 
-        # Exact ndarray views resolved by this client -> Vineyard object ref.
+        # Exact ndarray views resolved by this client -> (owner, object ref).
         # This is deliberately process-local. Each pipeline stage decodes the
         # object first, registering the shared-memory view, then its next
         # encode() can reuse the same object ID without another huge copy.
+        #
+        # ``owner`` is a weak reference to the root ndarray of the resolved
+        # view. Every NumPy view keeps its root alive, so the entry is valid
+        # for as long as any view of the object exists and is evicted by the
+        # weakref callback as soon as the last one is gone.
         self._resolved_refs: dict[
-            tuple[int, int, str, tuple[int, ...]], BlobRef
+            tuple[int, int, str, tuple[int, ...]],
+            tuple[weakref.ReferenceType[np.ndarray], BlobRef],
         ] = {}
 
     @classmethod
@@ -74,7 +92,7 @@ class VineyardStore:
         *,
         persist_on_put: bool = False,
         copy_concurrency: int = 6,
-    ) -> "VineyardStore":
+    ) -> VineyardStore:
         """Connect to a local Vineyard daemon."""
         vineyard = _load_vineyard()
 
@@ -119,12 +137,73 @@ class VineyardStore:
             shape=tuple(array.shape),
         )
 
+    @staticmethod
+    def _root(array: np.ndarray) -> np.ndarray:
+        """Return the ndarray at the bottom of ``array``'s ``.base`` chain."""
+        root = array
+        while isinstance(root.base, np.ndarray):
+            root = root.base
+        return root
+
     def _register_resolved(self, array: np.ndarray, ref: BlobRef) -> None:
-        self._resolved_refs[self._key(array)] = ref
+        key = self._key(array)
+        cache = self._resolved_refs
+
+        def evict(dead: weakref.ReferenceType[np.ndarray]) -> None:
+            entry = cache.get(key)
+            # A newer registration may already have replaced this entry.
+            if entry is not None and entry[0] is dead:
+                del cache[key]
+
+        cache[key] = (weakref.ref(self._root(array), evict), ref)
 
     def _try_reuse_resolved(self, array: np.ndarray) -> BlobRef | None:
         """Reuse an ndarray previously resolved by this VineyardStore."""
-        return self._resolved_refs.get(self._key(array))
+        entry = self._resolved_refs.get(self._key(array))
+        if entry is None:
+            return None
+
+        owner, ref = entry
+        # Same address, size, dtype and shape is not enough: the candidate
+        # must be a view of the very mapping that was resolved.
+        if owner() is not self._root(array):
+            return None
+
+        return ref
+
+    def _forget(self, ref: BlobRef) -> None:
+        """Drop every local registration of ``ref``'s object."""
+        # Iterate over a snapshot: weakref callbacks may evict entries from
+        # the live dictionary at any point, including during this loop.
+        stale = [
+            key
+            for key, (_owner, cached) in self._resolved_refs.copy().items()
+            if cached.object_id == ref.object_id
+        ]
+        for key in stale:
+            self._resolved_refs.pop(key, None)
+
+    def preview_ref(self, array: np.ndarray) -> BlobRef:
+        """Return the reference :meth:`put_array` would produce, storing nothing.
+
+        An already-resolved array yields its real reference. Anything else
+        yields a placeholder with a same-length object ID, which lets
+        ``npb.encoded_size`` stay exact without copying the payload.
+        """
+        self._validate_array(array)
+
+        existing = self._try_reuse_resolved(array)
+        if existing is not None:
+            return existing
+
+        return BlobRef(
+            store=self.kind,
+            object_id=_PLACEHOLDER_OBJECT_ID,
+            offset=0,
+            nbytes=array.nbytes,
+            dtype=array.dtype.str,
+            shape=tuple(array.shape),
+        )
 
     def put_array(self, array: np.ndarray) -> BlobRef:
         """Store an ndarray or reuse an already-resolved Vineyard object.
@@ -195,10 +274,8 @@ class VineyardStore:
 
         # Vineyard objects are immutable. Mark the Python view read-only as an
         # explicit guard even if the underlying resolver already does so.
-        try:
+        with suppress(ValueError):
             array.setflags(write=False)
-        except ValueError:
-            pass
 
         self._register_resolved(array, ref)
         return array
@@ -211,7 +288,9 @@ class VineyardStore:
         self.client.persist(self._object_id(ref.object_id))
 
     def release(self, ref: BlobRef) -> None:
+        self._forget(ref)
         self.client.release_object(self._object_id(ref.object_id))
 
     def delete(self, ref: BlobRef) -> None:
+        self._forget(ref)
         self.client.delete(self._object_id(ref.object_id))

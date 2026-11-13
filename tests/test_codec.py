@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Generic, TypeVar
 
 import numpy as np
 import pytest
+from pydantic import ConfigDict, ValidationError
 
 from npb import (
     FRAME_SIZE,
+    MIN_FRAME_SIZE,
     BinaryModel,
     BufferTooSmallError,
     SchemaMismatchError,
@@ -38,10 +41,44 @@ class Other(BinaryModel):
     name: str
 
 
+@binary_schema("tests.pair", version=1)
+class Pair(BinaryModel):
+    a: np.ndarray
+    b: np.ndarray
+
+
+@binary_schema("tests.blob", version=1)
+class Blob(BinaryModel):
+    name: str
+    payload: bytes
+
+
+@binary_schema("tests.meta", version=1)
+class Meta(BinaryModel):
+    meta: dict[str, object]
+
+
+@binary_schema("tests.strict-event", version=1)
+class StrictEvent(BinaryModel):
+    model_config = ConfigDict(strict=True, arbitrary_types_allowed=True)
+
+    at: datetime
+    pair: tuple[int, int]
+
+
+ItemT = TypeVar("ItemT")
+
+
+@binary_schema("tests.box", version=1)
+class Box(BinaryModel, Generic[ItemT]):
+    item: ItemT
+    data: np.ndarray
+
+
 def make_capture() -> Capture:
     return Capture(
         capture_id="cap-001",
-        created_at=datetime(2026, 9, 7, tzinfo=timezone.utc),
+        created_at=datetime(2026, 9, 7, tzinfo=UTC),
         meta={
             "nested": {
                 "enabled": True,
@@ -235,3 +272,218 @@ def test_encoded_size_handles_non_contiguous_array() -> None:
 
     assert not source.value.flags.c_contiguous
     assert encoded_size(source) == encode(source).nbytes
+
+
+# --- schema identity -------------------------------------------------------
+
+
+def test_subclass_does_not_inherit_schema_identity() -> None:
+    class ExtendedOther(Other):
+        extra: int = 0
+
+    with pytest.raises(TypeError, match="no binary schema identity of its own"):
+        encode(ExtendedOther(name="x", extra=7))
+
+    with pytest.raises(TypeError, match="no binary schema identity of its own"):
+        decode(ExtendedOther, encode(Other(name="x")))
+
+
+def test_subclass_can_redeclare_its_own_schema_identity() -> None:
+    @binary_schema("tests.other-extended", version=1)
+    class ExtendedOther(Other):
+        extra: int = 0
+
+    binary = encode(ExtendedOther(name="x", extra=7))
+
+    assert decode(ExtendedOther, binary).extra == 7
+    with pytest.raises(SchemaMismatchError):
+        decode(Other, binary)
+
+
+def test_parametrized_generic_model_uses_the_identity_of_its_origin() -> None:
+    restored = decode(Box[int], encode(Box[int](item=3, data=np.arange(4))))
+
+    assert restored.item == 3
+    assert np.array_equal(restored.data, np.arange(4))
+    assert peek(encode(Box[str](item="a", data=np.arange(1)))).schema_id == (
+        Box.__binary_schema_id__
+    )
+
+
+# --- values that previously failed or were stored inefficiently ------------
+
+
+def test_non_utf8_bytes_round_trip_as_binary_leaf() -> None:
+    payload = bytes(range(256)) * 3
+    binary = encode(Blob(name="jpeg", payload=payload))
+
+    assert peek(binary).data_bytes == len(payload)
+    assert decode(Blob, binary).payload == payload
+    assert decode_auto(binary)["payload"] == payload
+
+
+def test_utf8_bytes_keep_their_json_representation() -> None:
+    binary = encode(Blob(name="text", payload=b"plain ascii"))
+    info = peek(binary)
+
+    # Unchanged from NPB 0.3: no DATA section, no extended-manifest flag.
+    assert info.data_bytes == 0
+    assert info.flags == 0
+    assert decode(Blob, binary).payload == b"plain ascii"
+
+
+def test_strict_model_decodes_when_strict_is_overridden() -> None:
+    source = StrictEvent(at=datetime(2026, 1, 1, tzinfo=UTC), pair=(1, 2))
+    binary = encode(source)
+
+    with pytest.raises(ValidationError):
+        decode(StrictEvent, binary)
+
+    assert decode(StrictEvent, binary, strict=False) == source
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"$blob": "hello"},
+        {"$bin": {"kind": "ndarray", "offset": 0, "nbytes": 8, "dtype": "<f8", "shape": [1]}},
+        {"$bin": {"kind": "bytes", "offset": 0, "nbytes": 4}},
+        {"$$already": 1},
+        {"outer": {"$blob": {"$bin": {"$$x": [{"$blob": None}]}}}},
+    ],
+)
+def test_user_dicts_that_look_like_references_round_trip(meta: dict[str, object]) -> None:
+    binary = encode(Meta(meta=meta))
+
+    assert peek(binary).flags != 0
+    assert decode_auto(binary)["meta"] == meta
+    assert decode(Meta, binary).meta == meta
+
+
+def test_ordinary_dollar_keys_do_not_set_the_extended_flag() -> None:
+    meta = {"$ref": "#/defs/a", "nested": {"$id": 1}, "$bin": 1, "other": 2}
+    binary = encode(Meta(meta=meta))
+
+    # Multi-key dicts and unreserved "$" keys were never ambiguous.
+    assert peek(binary).flags == 0
+    assert decode(Meta, binary).meta == meta
+
+
+def test_same_array_referenced_twice_is_stored_once() -> None:
+    shared = np.arange(100_000, dtype=np.uint8)
+    binary = encode(Pair(a=shared, b=shared))
+
+    assert peek(binary).data_bytes == shared.nbytes
+
+    restored = decode(Pair, binary)
+    assert np.array_equal(restored.a, shared)
+    assert np.shares_memory(restored.a, restored.b)
+
+    # Equal contents in distinct objects are still stored separately.
+    assert peek(encode(Pair(a=shared, b=shared.copy()))).data_bytes > shared.nbytes
+
+
+@pytest.mark.parametrize(
+    "array",
+    [
+        np.array(3.5),
+        np.empty((0, 3), dtype=np.float32),
+        np.arange(6, dtype=">i4").reshape(2, 3),
+        np.asfortranarray(np.arange(12, dtype=np.float64).reshape(3, 4)),
+        np.arange(60, dtype=np.int16).reshape(3, 4, 5)[::-1, ::2, 1:4],
+        np.arange(40, dtype=np.complex64).reshape(4, 10).T,
+        np.array(["2026-01-01", "2026-06-30"], dtype="datetime64[s]"),
+        np.array(["ab", "c"]),
+        np.array([True, False, True]),
+    ],
+    ids=[
+        "0-d", "empty", "big-endian", "fortran", "strided",
+        "transposed", "datetime64", "unicode", "bool",
+    ],
+)
+def test_array_layouts_round_trip(array: np.ndarray) -> None:
+    out = np.full(encoded_size(Pair(a=array, b=array[...])), 0xAB, dtype=np.uint8)
+    restored = decode(Pair, encode(Pair(a=array, b=array[...]), out=out))
+
+    for value in (restored.a, restored.b):
+        assert value.dtype == array.dtype
+        assert value.shape == array.shape
+        assert np.array_equal(value, array)
+        assert value.flags.c_contiguous
+
+
+def test_reused_buffer_produces_identical_bytes_to_a_fresh_one() -> None:
+    source = Pair(
+        a=np.arange(7, dtype=np.uint8),
+        b=np.arange(30, dtype=np.float64).reshape(5, 6)[:, ::2],
+    )
+    dirty = np.full(encoded_size(source) + 1000, 0xFF, dtype=np.uint8)
+
+    assert np.array_equal(encode(source, out=dirty), encode(source))
+
+
+# --- inputs ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("wrap", [bytes, bytearray, memoryview])
+def test_bytes_like_containers_are_accepted_without_copying(wrap) -> None:
+    source = make_capture()
+    raw = wrap(encode(source).tobytes())
+
+    assert peek(raw).schema_version == 3
+    assert decode_auto(raw)["capture_id"] == "cap-001"
+
+    restored = decode(Capture, raw)
+    pixels = restored.images[0].pixels
+    assert np.array_equal(pixels, source.images[0].pixels)
+    assert np.shares_memory(pixels, np.frombuffer(raw, dtype=np.uint8))
+    assert pixels.flags.writeable is (wrap is bytearray)
+
+
+def test_unsupported_container_types_are_rejected() -> None:
+    with pytest.raises(TypeError):
+        peek("not bytes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        decode_auto(np.zeros(FRAME_SIZE, dtype=np.uint16))
+
+
+# --- frame size ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("frame_size", [MIN_FRAME_SIZE, 256, 4096, FRAME_SIZE, 1 << 20])
+def test_custom_frame_size_round_trip(frame_size: int) -> None:
+    source = make_capture()
+    binary = encode(source, frame_size=frame_size)
+    info = peek(binary)
+
+    assert info.frame_size == frame_size
+    assert binary.nbytes % frame_size == 0
+    assert info.data_start % frame_size == 0
+    assert binary.nbytes == encoded_size(source, frame_size=frame_size)
+    assert binary.reshape(info.frame_count, frame_size).shape[0] == info.frame_count
+
+    restored = decode(Capture, binary)
+    assert restored.capture_id == source.capture_id
+    for got, want in zip(restored.images, source.images, strict=True):
+        assert np.array_equal(got.pixels, want.pixels)
+        assert np.shares_memory(got.pixels, binary)
+
+
+def test_small_frames_keep_tiny_messages_tiny() -> None:
+    message = Other(name="x")
+
+    assert encode(message).nbytes == FRAME_SIZE
+    assert encode(message, frame_size=MIN_FRAME_SIZE).nbytes == 2 * MIN_FRAME_SIZE
+
+
+@pytest.mark.parametrize("frame_size", [0, 32, 100, 65537, 1 << 31, -64])
+def test_invalid_frame_size_is_rejected(frame_size: int) -> None:
+    with pytest.raises(ValueError, match="frame_size"):
+        encode(Other(name="x"), frame_size=frame_size)
+    with pytest.raises(ValueError, match="frame_size"):
+        encoded_size(Other(name="x"), frame_size=frame_size)
+
+
+def test_frame_size_must_be_an_integer() -> None:
+    with pytest.raises(TypeError):
+        encode(Other(name="x"), frame_size=4096.0)  # type: ignore[arg-type]
