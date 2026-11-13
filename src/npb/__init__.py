@@ -15,6 +15,13 @@ from ._schema import BinaryModel, binary_schema
 from ._vineyard import VineyardStore
 from ._zmq import ZmqPull, ZmqPush
 
+from ._fixed import (
+    FixedField,UInt8,UInt16,UInt32,UInt64,Int8,Int16,Int32,Int64,Float32,Float64,
+    Bool8,FixedStr,IPv4,Enum8,FixedPointU16,FixedNDArray,Bit,Nested,OptionalNested,
+    FixedArray,FixedStructMeta,FixedStruct,NpbStruct
+)
+from ._fixed_codec import decode_fixed, encode_fixed
+
 __all__ = [
     "FRAME_SIZE",
     "MIN_FRAME_SIZE",
