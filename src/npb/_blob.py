@@ -7,6 +7,10 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+#: Object-ID length assumed by ``encoded_size`` for stores that do not
+#: implement the optional ``preview_ref`` hook (a UUID in hex).
+DEFAULT_OBJECT_ID_LENGTH = 32
+
 
 @dataclass(frozen=True, slots=True)
 class BlobRef:
@@ -30,7 +34,7 @@ class BlobRef:
         }
 
     @classmethod
-    def from_manifest(cls, value: object) -> "BlobRef":
+    def from_manifest(cls, value: object) -> BlobRef:
         if not isinstance(value, dict):
             raise TypeError("blob reference must be an object")
 
@@ -41,7 +45,7 @@ class BlobRef:
             nbytes = int(value["nbytes"])
             dtype = str(value["dtype"])
             shape = tuple(int(dim) for dim in value["shape"])
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise TypeError("invalid blob reference") from exc
 
         if not store:
@@ -53,9 +57,16 @@ class BlobRef:
         if any(dim < 0 for dim in shape):
             raise ValueError("blob ndarray shape cannot contain negative dimensions")
 
-        np_dtype = np.dtype(dtype)
+        try:
+            np_dtype = np.dtype(dtype)
+        except SyntaxError as exc:  # raised by NumPy for some malformed strings
+            raise ValueError("invalid dtype in blob reference") from exc
 
-        if np_dtype.hasobject or np_dtype.fields is not None:
+        if (
+            np_dtype.hasobject
+            or np_dtype.fields is not None
+            or np_dtype.subdtype is not None
+        ):
             raise ValueError("unsupported dtype in blob reference")
 
         expected = np_dtype.itemsize
@@ -77,7 +88,29 @@ class BlobRef:
 
 @runtime_checkable
 class BlobStore(Protocol):
-    """Storage backend used by NPB for immutable ndarray payloads."""
+    """Storage backend used by NPB for immutable ndarray payloads.
+
+    Optional hook
+    -------------
+    A store may additionally implement::
+
+        def preview_ref(self, array: np.ndarray) -> BlobRef: ...
+
+    ``preview_ref`` must not store anything. It returns the existing
+    reference when ``put_array(array)`` would reuse an object that is already
+    in the store, and otherwise a placeholder whose ``object_id`` has the same
+    length as a real one. NPB uses it to
+
+    * keep :func:`npb.encoded_size` exact and free of side effects, and
+    * tell newly created objects from reused ones, so that objects created by
+      an ``encode()`` call that subsequently fails can be deleted again.
+
+    The hook is deliberately not part of this protocol's required surface, so
+    stores written for NPB <= 0.3 keep satisfying ``isinstance(store,
+    BlobStore)``. Without it, ``encoded_size`` assumes
+    :data:`DEFAULT_OBJECT_ID_LENGTH`-character object IDs and failed encodes
+    are not rolled back.
+    """
 
     @property
     def kind(self) -> str:

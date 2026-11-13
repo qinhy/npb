@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Self, TypeVar
 
 import numpy as np
 from pydantic import BaseModel
 
 from ._blob import BlobStore
 from ._codec import decode, decode_auto, encode
-from ._format import require_binary_array
-from ._fixed import FixedStruct
-from ._fixed_codec import decode_fixed, encode_fixed
+from ._format import FRAME_SIZE, require_binary_array
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -82,12 +80,12 @@ class _ZmqSocket:
             self._socket.connect(endpoint)
 
     @classmethod
-    def bind(cls, endpoint: str, **kwargs: Any):
+    def bind(cls, endpoint: str, **kwargs: Any) -> Self:
         """Create a socket and bind it to ``endpoint``."""
         return cls(endpoint, bind=True, **kwargs)
 
     @classmethod
-    def connect(cls, endpoint: str, **kwargs: Any):
+    def connect(cls, endpoint: str, **kwargs: Any) -> Self:
         """Create a socket and connect it to ``endpoint``."""
         return cls(endpoint, bind=False, **kwargs)
 
@@ -101,7 +99,7 @@ class _ZmqSocket:
         self._socket.close()
         self._closed = True
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -135,14 +133,21 @@ class _ZmqSocket:
         *,
         blob_store: BlobStore | None = None,
         externalize_min_bytes: int | None = None,
+        frame_size: int = FRAME_SIZE,
         copy: bool = True,
         flags: int = 0,
     ) -> int:
-        """Encode and send a Pydantic model in one call."""
+        """Encode and send a Pydantic model in one call.
+
+        Pass a small ``frame_size`` such as ``npb.MIN_FRAME_SIZE`` to keep
+        reference-only control messages down to a few hundred bytes. Every
+        receiver must then run NPB >= 0.4.
+        """
         binary = encode(
             model,
             blob_store=blob_store,
             externalize_min_bytes=externalize_min_bytes,
+            frame_size=frame_size,
         )
         return self.send(binary, copy=copy, flags=flags)
 
@@ -151,6 +156,7 @@ class _ZmqSocket:
         model_type: type[T],
         *,
         blob_store: BlobStore | None = None,
+        strict: bool | None = None,
         flags: int = 0,
     ) -> T:
         """Receive and typed-decode one NPB control message."""
@@ -158,6 +164,7 @@ class _ZmqSocket:
             model_type,
             self.recv(flags=flags),
             blob_store=blob_store,
+            strict=strict,
         )
 
     def recv_auto(

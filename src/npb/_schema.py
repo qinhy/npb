@@ -54,12 +54,54 @@ def binary_schema(name: str, *, version: int = 1) -> Callable[[ModelT], ModelT]:
     return decorate
 
 
-def schema_identity(model_type: type[BaseModel]) -> tuple[UUID, int]:
-    """Return the declared schema UUID and version for a model."""
-    schema_id = getattr(model_type, "__binary_schema_id__", None)
-    schema_version = getattr(model_type, "__binary_schema_version__", None)
+def _own_schema_identity(model_type: type[BaseModel]) -> tuple[object, object]:
+    """Return the identity declared on ``model_type`` itself, not on a parent."""
+    own = vars(model_type)
+    schema_id = own.get("__binary_schema_id__")
+    schema_version = own.get("__binary_schema_version__")
 
-    if not isinstance(schema_id, UUID) or not isinstance(schema_version, int):
+    if schema_id is None and schema_version is None:
+        # ``Model[int]`` is a dynamically created subclass of the generic
+        # ``Model``; it is the same schema, so use the identity of its origin.
+        metadata = getattr(model_type, "__pydantic_generic_metadata__", None) or {}
+        origin = metadata.get("origin")
+        if isinstance(origin, type) and origin is not model_type:
+            return _own_schema_identity(origin)
+
+    return schema_id, schema_version
+
+
+def schema_identity(model_type: type[BaseModel]) -> tuple[UUID, int]:
+    """Return the declared schema UUID and version for a model.
+
+    The identity must be declared on the class itself. A subclass does not
+    inherit its parent's identity, because it may add or change fields and
+    would otherwise be silently decoded as the parent.
+    """
+    schema_id, schema_version = _own_schema_identity(model_type)
+
+    if (
+        not isinstance(schema_id, UUID)
+        or isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+    ):
+        inherited_from = next(
+            (
+                base
+                for base in model_type.__mro__[1:]
+                if isinstance(vars(base).get("__binary_schema_id__"), UUID)
+            ),
+            None,
+        )
+
+        if inherited_from is not None:
+            raise TypeError(
+                f"{model_type.__name__} subclasses {inherited_from.__name__} but has "
+                "no binary schema identity of its own; decorate it with "
+                "@binary_schema(...). Reuse the parent's name and version only if "
+                "both classes serialize identically."
+            )
+
         raise TypeError(
             f"{model_type.__name__} has no binary schema identity; "
             "decorate the top-level model with @binary_schema(...)"

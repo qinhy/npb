@@ -68,7 +68,7 @@ def parse_size(value: str) -> int:
     """Parse a positive byte count, optionally suffixed by KiB/MiB/GiB."""
     normalized = value.strip().lower().replace("ib", "b")
     suffixes = {"kb": 1024, "mb": 1024**2, "gb": 1024**3, "b": 1}
-    for suffix, multiplier in suffixes.items():
+    for suffix in suffixes:
         if normalized.endswith(suffix):
             number = normalized[: -len(suffix)]
             break

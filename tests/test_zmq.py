@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("zmq")
 
-from npb import BinaryModel, ZmqPull, ZmqPush, binary_schema  # noqa: E402
+from npb import MIN_FRAME_SIZE, BinaryModel, ZmqPull, ZmqPush, binary_schema  # noqa: E402
 
 
 @binary_schema("tests.zmq-message", version=1)
@@ -67,3 +67,27 @@ def test_zmq_recv_auto() -> None:
 
     assert restored["name"] == "auto"
     assert np.array_equal(restored["values"], source.values)
+
+
+def test_zmq_send_model_with_small_frames() -> None:
+    endpoint = unique_endpoint()
+    source = Message(name="compact", values=np.arange(8, dtype=np.float32))
+
+    with (
+        ZmqPull.bind(endpoint, recv_timeout_ms=1000) as receiver,
+        ZmqPush.connect(endpoint, send_timeout_ms=1000) as sender,
+    ):
+        sent = sender.send_model(source, frame_size=MIN_FRAME_SIZE)
+        restored = receiver.recv_model(Message, strict=False)
+
+    assert sent < 512
+    assert restored.name == "compact"
+    assert np.array_equal(restored.values, source.values)
+
+
+def test_zmq_bind_and_connect_return_the_concrete_socket_type() -> None:
+    endpoint = unique_endpoint()
+
+    with ZmqPull.bind(endpoint) as receiver, ZmqPush.connect(endpoint) as sender:
+        assert type(receiver) is ZmqPull
+        assert type(sender) is ZmqPush
