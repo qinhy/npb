@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import time
 
-from npb import BinaryModel, binary_schema
 from mstore import default_endpoint
 
+from npb import BinaryModel, binary_schema
 
 DEFAULT_MSTORE_ENDPOINT = default_endpoint()
 ZMQ_BASE_PORT = 55600

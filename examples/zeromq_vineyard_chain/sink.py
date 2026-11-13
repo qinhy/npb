@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import time
 
-from npb import ZmqPull, decode
-
 from common import DEFAULT_VINEYARD_SOCKET, ChainMessage, endpoint, open_store
+
+from npb import ZmqPull, decode
 
 
 def main() -> None:
@@ -23,9 +23,8 @@ def main() -> None:
     print(f"sink waiting on {input_endpoint}")
 
     with ZmqPull.bind(input_endpoint, hwm=4) as receiver:
-        t0 = time.perf_counter()
+        # Block until a message is ready so recv_ms measures only the receive.
         receiver._socket.poll()
-        wait_ms = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
         control = receiver.recv()

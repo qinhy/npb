@@ -5,11 +5,9 @@ import ctypes
 import time
 
 import iceoryx2 as iox2
-import numpy as np
+from common import EXTERNALIZE, ChainMessage, open_store, slice_as_numpy
 
 from npb import decode, encode
-
-from common import EXTERNALIZE, ChainMessage, open_store, slice_as_numpy
 
 
 def service_name(index: int) -> str:

@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import time
 
-from npb import BlobRef, ZmqPull, ZmqPush, decode, decode_auto, encode
-
 from common import DEFAULT_VINEYARD_SOCKET, EXTERNALIZE, ChainMessage, endpoint, open_store
+
+from npb import BlobRef, ZmqPull, ZmqPush, decode, decode_auto, encode
 
 
 def image_ref(control):
@@ -39,9 +39,8 @@ def main() -> None:
             send_timeout_ms=5000,
         ) as sender,
     ):
-        t0 = time.perf_counter()
+        # Block until a message is ready so recv_ms measures only the receive.
         receiver._socket.poll()
-        wait_ms = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
         incoming = receiver.recv()

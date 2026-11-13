@@ -16,7 +16,11 @@ def build_parser() -> argparse.ArgumentParser:
             "tcp://HOST:PORT fallback (default: %(default)s)"
         ),
     )
-    parser.add_argument("--debug", action="store_true", help="include tracebacks in internal errors")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="include tracebacks in internal errors",
+    )
     return parser
 
 

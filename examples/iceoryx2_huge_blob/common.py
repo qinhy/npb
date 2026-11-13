@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import os
 import ctypes
-from pathlib import Path
+import os
 import tempfile
 import time
+from pathlib import Path
 
 import numpy as np
 
 from npb import BinaryModel, binary_schema
-
 
 SERVICE_NAME = "npb/huge-blob/v1"
 DEFAULT_GIB = 2.0

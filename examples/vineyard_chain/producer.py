@@ -5,11 +5,9 @@ import ctypes
 import time
 
 import iceoryx2 as iox2
+from common import EXTERNALIZE, make_message, open_store, slice_as_numpy
 
 from npb import encode
-
-from common import EXTERNALIZE, ChainMessage, make_message, open_store, slice_as_numpy
-
 
 SERVICE = "npb/vineyard-chain/0"
 

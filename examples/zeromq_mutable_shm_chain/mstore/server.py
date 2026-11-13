@@ -18,7 +18,7 @@ from .errors import (
     TokenExpired,
     TokenRevoked,
 )
-from .registry import DELETE, INFO, READ, WRITE, Registry
+from .registry import INFO, READ, WRITE, Registry
 from .transport import (
     ControlConnection,
     PipeControlConnection,
@@ -92,7 +92,7 @@ class MStoreServer:
         while not self._stop.is_set():
             try:
                 sock, _addr = listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 if self._stop.is_set():
@@ -238,7 +238,11 @@ class MStoreServer:
                     except OSError:
                         pass
                     try:
-                        conn.send(self._error_payload(ProtocolError("unexpected client file descriptor")))
+                        conn.send(
+                            self._error_payload(
+                                ProtocolError("unexpected client file descriptor")
+                            )
+                        )
                     except Exception:
                         pass
                     break

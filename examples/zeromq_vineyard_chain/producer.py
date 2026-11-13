@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import time
 
-from npb import ZmqPush, decode_auto, encode
-
 from common import DEFAULT_VINEYARD_SOCKET, EXTERNALIZE, endpoint, make_message, open_store
+
+from npb import ZmqPush, decode_auto, encode
 
 
 def main() -> None:

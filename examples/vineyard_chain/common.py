@@ -7,7 +7,6 @@ import numpy as np
 
 from npb import BinaryModel, VineyardStore, binary_schema
 
-
 EXTERNALIZE = 1 * 1024 * 1024
 
 

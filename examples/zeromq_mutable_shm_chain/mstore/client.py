@@ -4,7 +4,8 @@ import mmap
 import os
 import threading
 from collections import OrderedDict
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 
@@ -53,7 +54,7 @@ class _MappingState:
 class SharedObject:
     def __init__(
         self,
-        client: "Client",
+        client: Client,
         info: dict[str, Any],
         token: str,
         mode: str,
@@ -157,7 +158,7 @@ class SharedObject:
         self._released = True
         self._state.release()
 
-    def __enter__(self) -> "SharedObject":
+    def __enter__(self) -> SharedObject:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -483,7 +484,7 @@ class Client:
             self._drop_connection()
             self._closed = True
 
-    def __enter__(self) -> "Client":
+    def __enter__(self) -> Client:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

@@ -6,16 +6,15 @@ import time
 
 import iceoryx2 as iox2
 import numpy as np
-
-from npb import decode, decode_auto, peek
-
 from common import (
-    HugeBlob,
     SERVICE_NAME,
+    HugeBlob,
     check_markers,
     print_profile_summary,
     slice_as_numpy,
 )
+
+from npb import decode, decode_auto, peek
 
 
 def parse_args() -> argparse.Namespace:

@@ -21,7 +21,7 @@ class LinuxMemfdRegion:
     name: str
 
     @classmethod
-    def create(cls, size: int, object_id: str) -> "LinuxMemfdRegion":
+    def create(cls, size: int, object_id: str) -> LinuxMemfdRegion:
         if not hasattr(os, "memfd_create"):
             raise RuntimeError("Linux memfd_create() is required by the Linux backend")
         flags = getattr(os, "MFD_CLOEXEC", 0)
@@ -58,7 +58,7 @@ class WindowsNamedRegion:
     name: str
 
     @classmethod
-    def create(cls, size: int, object_id: str) -> "WindowsNamedRegion":
+    def create(cls, size: int, object_id: str) -> WindowsNamedRegion:
         # The daemon keeps this mapping open so its named kernel object survives
         # producer/client exits. Random suffixes prevent collisions with stale views.
         name = f"mstore-{object_id}-{secrets.token_hex(8)}"

@@ -4,10 +4,10 @@ import argparse
 import time
 
 import numpy as np
-from npb import ZmqPush, encode
+from common import DEFAULT_MSTORE_ENDPOINT, ChainMessage, ShmArrayRef, endpoint, new_frame_id
 from mstore import connect
 
-from common import ChainMessage, DEFAULT_MSTORE_ENDPOINT, ShmArrayRef, endpoint, new_frame_id
+from npb import ZmqPush, encode
 
 
 def main() -> None:

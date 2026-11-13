@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-from pathlib import Path
 import time
+from pathlib import Path
 
 import iceoryx2 as iox2
 import numpy as np
-
-from npb import encode, encoded_size
-
 from common import (
     DEFAULT_GIB,
     SERVICE_NAME,
@@ -18,6 +15,8 @@ from common import (
     print_profile_summary,
     slice_as_numpy,
 )
+
+from npb import encode, encoded_size
 
 
 def parse_args() -> argparse.Namespace:

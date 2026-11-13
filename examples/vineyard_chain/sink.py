@@ -5,11 +5,9 @@ import ctypes
 import time
 
 import iceoryx2 as iox2
-import numpy as np
+from common import ChainMessage, open_store, slice_as_numpy
 
 from npb import decode
-
-from common import ChainMessage, open_store, slice_as_numpy
 
 
 def main() -> None:

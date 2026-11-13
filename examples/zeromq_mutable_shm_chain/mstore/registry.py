@@ -5,7 +5,8 @@ import secrets
 import threading
 import time
 import uuid
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .backend import create_region
 from .errors import (
@@ -164,7 +165,9 @@ class Registry:
             if target is None or target.object_id != object_id:
                 raise AuthenticationError("target token is invalid")
             if target.permissions == ALL_PERMISSIONS and target_raw == issuer_raw:
-                raise InvalidRequest("refusing to revoke the token currently authorizing this request")
+                raise InvalidRequest(
+                    "refusing to revoke the token currently authorizing this request"
+                )
             target.revoked = True
 
     def delete_object(self, object_id: str, raw_token: str) -> None:

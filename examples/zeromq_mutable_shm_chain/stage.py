@@ -4,10 +4,10 @@ import argparse
 import statistics
 import time
 
-from npb import ZmqPull, ZmqPush, decode, encode
+from common import DEFAULT_MSTORE_ENDPOINT, ChainMessage, endpoint
 from mstore import connect
 
-from common import ChainMessage, DEFAULT_MSTORE_ENDPOINT, endpoint
+from npb import ZmqPull, ZmqPush, decode, encode
 
 
 def main() -> None:

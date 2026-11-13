@@ -5,7 +5,8 @@ import os
 import re
 import socket
 from multiprocessing.connection import Client as PipeClient
-from multiprocessing.connection import Connection, Listener as PipeListener
+from multiprocessing.connection import Connection
+from multiprocessing.connection import Listener as PipeListener
 from pathlib import Path
 from typing import Any, Protocol
 
